@@ -40,7 +40,7 @@ spicetify apply
 
 ## Known limits
 
-- Tested on Windows in Spicy Lyrics' fullscreen view. The panel view and songs without a video are not tested yet.
+- Tested on Windows in Spicy Lyrics' medium and fullscreen views. The stacked layout for narrow windows and songs without a video are not tested yet.
 - It relies on internals of Spotify and Spicy Lyrics, so an update to either one can break it.
 - While a mix plays it temporarily changes the playback position Spotify reports to other extensions.
 

@@ -11,6 +11,8 @@
   const FADE_MS = 1500;
   const FRAME_MS = 33;
   const COLUMNS_MIN_WIDTH = 800;
+  const COLUMN_MARGIN = 0.065;
+  const COLUMN_GAP = 40;
   // Margen tras la última línea de la canción que sale antes de devolverle la pantalla a la nueva
   const RELEASE_AFTER_LAST_LINE_MS = 1000;
   // Spicy Lyrics adelanta su reloj esto mismo para compensar el retardo del audio
@@ -31,15 +33,20 @@
       transform: translateX(var(--ml-shift, 50%));
     }
     /* La columna derecha es un espejo: recta por la derecha y desigual hacia el centro */
+    /* El relleno izquierdo mantiene la letra dentro de su mitad en las vistas medianas */
+    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line {
+      box-sizing: border-box;
+      padding-left: var(--ml-pad-left, 0) !important;
+    }
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) {
+      padding-right: var(--ml-pad, 0) !important;
       text-align: right !important;
       justify-content: flex-end !important;
       transform-origin: right center;
     }
     /* La segunda voz también va en espejo: hacia el centro, con el mismo ancho para que no cambie de filas */
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line.OppositeAligned {
-      padding-left: 0 !important;
-      padding-right: var(--DuetLineInset, 0) !important;
+      padding-right: var(--ml-pad, 0) !important;
       text-align: left !important;
       justify-content: flex-start !important;
       transform-origin: left center;
@@ -365,7 +372,7 @@
     if (!view) return;
     const { page, box, fader, backdrop } = view;
     page.classList.remove("ml-mixing", "ml-columns", "ml-stacked");
-    ["--ml-in", "--ml-out", "--ml-shift"].forEach((name) => page.style.removeProperty(name));
+    ["--ml-in", "--ml-out", "--ml-shift", "--ml-pad", "--ml-pad-left"].forEach((name) => page.style.removeProperty(name));
     box.remove();
     fader.remove();
     backdrop.remove();
@@ -437,23 +444,38 @@
     fader.append(leftName, rail, rightName);
     contentBox.append(fader);
 
-    view = { page, box, scroller, rows, fader, knob, rail, original, backdrop, backOut, focused: -1, aimY: null, alignedAt: 0 };
+    view = { page, box, scroller, rows, fader, knob, rail, original, backdrop, backOut, gutter, focused: -1, aimY: null, alignedAt: 0 };
   }
 
-  // El borde derecho de las líneas nuevas queda a la misma distancia del borde que las de la izquierda.
-  // Spicy Lyrics cambia el tamaño de su letra justo al entrar la canción, así que se repite durante la mezcla.
+  // Las dos columnas quedan a la misma distancia de su borde: la que usa la letra de Spicy Lyrics.
+  // Spicy Lyrics cambia el tamaño de su letra al entrar la canción y al cambiar de vista, así que se repite.
   // Se mide en una línea cantada: las de solo música no llevan el relleno derecho de las demás
-  function alignRightEdge() {
-    const { page, original, rows } = view;
+  function alignEdges() {
+    const { page, original, rows, scroller } = view;
     const typical = original?.querySelector(".line:not(.musical-line):not(.bg-line):not(.OppositeAligned)");
     if (!typical) return;
-    const margin = rows[0].el.getBoundingClientRect().left - page.getBoundingClientRect().left;
-    const textWidth = typical.offsetWidth - parseFloat(getComputedStyle(typical).paddingRight);
-    const shift = Math.round(Math.max(0, page.clientWidth - 2 * margin - textWidth));
+    const pageWidth = page.clientWidth;
+    const pageLeft = page.getBoundingClientRect().left;
+    const moved = new DOMMatrix(getComputedStyle(original).transform).m41;
+    const base = typical.getBoundingClientRect().left - pageLeft - moved;
+    // En las vistas medianas Spicy Lyrics centra la letra con mucho margen: ahí se reduce para que quepan dos columnas
+    const margin = Math.min(base, pageWidth * COLUMN_MARGIN);
+    const off = margin - (rows[0].el.getBoundingClientRect().left - pageLeft);
+    if (Math.abs(off) > 1) {
+      view.gutter = Math.max(0, view.gutter + off);
+      scroller.style.paddingLeft = `${Math.round(view.gutter)}px`;
+      scroller.style.paddingRight = `${COLUMN_GAP}px`;
+    }
+    const padding = parseFloat(getComputedStyle(typical).paddingRight);
+    const textWidth = typical.offsetWidth - padding;
+    const columnWidth = pageWidth / 2 - margin - COLUMN_GAP;
+    const shift = Math.round(Math.max(0, pageWidth - margin - base - textWidth));
     if (shift !== view.shift) {
       view.shift = shift;
       page.style.setProperty("--ml-shift", `${shift}px`);
     }
+    page.style.setProperty("--ml-pad", `${padding}px`);
+    page.style.setProperty("--ml-pad-left", `${Math.round(Math.max(0, textWidth - columnWidth))}px`);
   }
 
   function paint(position, elapsed, now) {
@@ -476,10 +498,15 @@
     // Las líneas activas de las dos canciones quedan a la misma altura
     const isColumns = page.classList.contains("ml-columns");
     if (now - view.alignedAt > 400 || target !== view.focused) {
+      // La ventana pudo cambiar de tamaño sin que Spicy Lyrics cree otra página
+      if ((page.clientWidth >= COLUMNS_MIN_WIDTH) !== isColumns) {
+        mount(page);
+        return;
+      }
       view.alignedAt = now;
       let aim = box.clientHeight * 0.34;
       if (isColumns) {
-        alignRightEdge();
+        alignEdges();
         const live = original?.querySelector(".line.Active");
         if (live) aim = live.getBoundingClientRect().top - box.getBoundingClientRect().top;
         else if (view.aimY !== null) aim = view.aimY;
