@@ -4,6 +4,8 @@ A Spicetify extension for Spotify's mixed playlists. During a transition, [Spicy
 
 This is for playlists mixed in Spotify's transition editor, not for crossfade.
 
+<img src="https://raw.githubusercontent.com/SrPictus/mix-lyrics/main/preview.png" alt="Illustration of two songs' lyrics side by side during a mix" width="480">
+
 ## Features
 
 - Both songs on screen until the outgoing lyrics end, with Spicy Lyrics' own fonts and syllable animation
@@ -20,6 +22,10 @@ This is for playlists mixed in Spotify's transition editor, not for crossfade.
 - A playlist with transitions made in Spotify's mix editor
 
 ## Install
+
+From the Spicetify Marketplace: search for **Mix Lyrics** in the Extensions tab and install it.
+
+Or by hand:
 
 1. Copy `mix-lyrics.js` to the Spicetify `Extensions` folder (`%appdata%\spicetify\Extensions` on Windows, `~/.config/spicetify/Extensions` on macOS and Linux).
 2. Run:

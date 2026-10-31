@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Mix Lyrics",
+    "description": "Keeps both songs' synced lyrics on screen, side by side, during Spotify's mixed playlist transitions. Requires Spicy Lyrics.",
+    "preview": "preview.png",
+    "main": "mix-lyrics.js",
+    "readme": "README.md",
+    "authors": [{ "name": "SrPictus", "url": "https://github.com/SrPictus" }],
+    "tags": ["lyrics", "mix", "spicy lyrics"]
+  }
+]
