@@ -28,6 +28,11 @@
       position: relative;
       z-index: 2;
       opacity: var(--ml-in, 1);
+      transition: none;
+    }
+    /* Hasta saber dónde va, la letra nueva no se enseña: así nunca aparece fuera de su sitio */
+    #SpicyLyricsPage.ml-columns:not(.ml-aligned) ${NEW_LYRICS} {
+      opacity: 0;
     }
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} {
       transform: translateX(var(--ml-shift, 50%));
@@ -371,7 +376,7 @@
   function unmount() {
     if (!view) return;
     const { page, box, fader, backdrop } = view;
-    page.classList.remove("ml-mixing", "ml-columns", "ml-stacked");
+    page.classList.remove("ml-mixing", "ml-columns", "ml-stacked", "ml-aligned");
     ["--ml-in", "--ml-out", "--ml-shift", "--ml-pad", "--ml-pad-left"].forEach((name) => page.style.removeProperty(name));
     box.remove();
     fader.remove();
@@ -453,19 +458,18 @@
   function alignEdges() {
     const { page, original, rows, scroller } = view;
     const typical = original?.querySelector(".line:not(.musical-line):not(.bg-line):not(.OppositeAligned)");
-    if (!typical) return;
     const pageWidth = page.clientWidth;
     const pageLeft = page.getBoundingClientRect().left;
-    const moved = new DOMMatrix(getComputedStyle(original).transform).m41;
-    const base = typical.getBoundingClientRect().left - pageLeft - moved;
-    // En las vistas medianas Spicy Lyrics centra la letra con mucho margen: ahí se reduce para que quepan dos columnas
+    const moved = original ? new DOMMatrix(getComputedStyle(original).transform).m41 : 0;
+    const base = typical ? typical.getBoundingClientRect().left - pageLeft - moved : Infinity;
+    // En las vistas medianas Spicy Lyrics centra la letra con mucho margen: ahí se reduce para que quepan dos columnas.
+    // La letra nueva puede tardar en montarse, pero la columna izquierda se coloca desde el primer momento
     const margin = Math.min(base, pageWidth * COLUMN_MARGIN);
     const off = margin - (rows[0].el.getBoundingClientRect().left - pageLeft);
-    if (Math.abs(off) > 1) {
-      view.gutter = Math.max(0, view.gutter + off);
-      scroller.style.paddingLeft = `${Math.round(view.gutter)}px`;
-      scroller.style.paddingRight = `${COLUMN_GAP}px`;
-    }
+    if (Math.abs(off) > 1) view.gutter = Math.max(0, view.gutter + off);
+    scroller.style.paddingLeft = `${Math.round(view.gutter)}px`;
+    scroller.style.paddingRight = `${COLUMN_GAP}px`;
+    if (!typical) return;
     const padding = parseFloat(getComputedStyle(typical).paddingRight);
     const textWidth = typical.offsetWidth - padding;
     const columnWidth = pageWidth / 2 - margin - COLUMN_GAP;
@@ -476,6 +480,7 @@
     }
     page.style.setProperty("--ml-pad", `${padding}px`);
     page.style.setProperty("--ml-pad-left", `${Math.round(Math.max(0, textWidth - columnWidth))}px`);
+    page.classList.add("ml-aligned");
   }
 
   function paint(position, elapsed, now) {
@@ -497,6 +502,8 @@
 
     // Las líneas activas de las dos canciones quedan a la misma altura
     const isColumns = page.classList.contains("ml-columns");
+    // Mientras la letra nueva no tenga su sitio se mira en cada cuadro, no cada 400 ms
+    if (isColumns && !page.classList.contains("ml-aligned")) alignEdges();
     if (now - view.alignedAt > 400 || target !== view.focused) {
       // La ventana pudo cambiar de tamaño sin que Spicy Lyrics cree otra página
       if ((page.clientWidth >= COLUMNS_MIN_WIDTH) !== isColumns) {
@@ -510,6 +517,8 @@
         const live = original?.querySelector(".line.Active");
         if (live) aim = live.getBoundingClientRect().top - box.getBoundingClientRect().top;
         else if (view.aimY !== null) aim = view.aimY;
+        // Al cambiar de vista la letra nueva pasa un momento fuera de pantalla: no se la sigue hasta allí
+        aim = Math.min(box.clientHeight * 0.7, Math.max(box.clientHeight * 0.1, aim));
       }
       if (target !== view.focused || view.aimY === null || Math.abs(aim - view.aimY) > 6) {
         // El mismo desenfoque por distancia que Spicy Lyrics pone a sus líneas
@@ -520,9 +529,16 @@
             row.el.style.setProperty("--BlurAmount", `${blur}px`);
           }
         });
+        // Recién montada va directa a su línea, sin recorrer la canción desde el principio
+        const first = view.focused === -1;
+        if (first) scroller.style.transition = "none";
         view.focused = target;
         view.aimY = aim;
         scroller.style.transform = `translateY(${Math.round(aim - rows[target].el.offsetTop)}px)`;
+        if (first) {
+          void scroller.offsetHeight;
+          scroller.style.transition = "";
+        }
       }
     }
 
