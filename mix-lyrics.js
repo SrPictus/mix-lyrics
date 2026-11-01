@@ -37,10 +37,12 @@
       transform: translateX(var(--ml-shift, 50%));
     }
     /* La columna derecha es un espejo: recta por la derecha y desigual hacia el centro */
-    /* El relleno izquierdo mantiene la letra dentro de su mitad en las vistas medianas */
+    /* El relleno izquierdo mantiene la letra dentro de su mitad en las vistas medianas. Las líneas no
+       reaccionan al ratón: su recuadro al pasar por encima ocuparía también la otra columna */
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line {
       box-sizing: border-box;
       padding-left: var(--ml-pad-left, 0) !important;
+      pointer-events: none;
     }
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) {
       padding-right: var(--ml-pad, 0) !important;
@@ -117,7 +119,17 @@
       will-change: transform;
       transition: transform 0.45s cubic-bezier(.22,1,.36,1);
     }
-    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line { margin-block: 0.45em; }
+    /* El tamaño de Spicy Lyrics depende de su contenedor, que aquí es otro: se copia lo que tiene la letra nueva */
+    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line {
+      --DefaultLyricsSize: var(--ml-font, 3rem) !important;
+      margin-block: var(--ml-gap, 0.45em) !important;
+    }
+    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line:not(.bg-line) {
+      font-size: var(--ml-font, 3rem) !important;
+    }
+    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line.bg-line {
+      font-size: var(--ml-font-bg, calc(var(--ml-font, 3rem) * 0.7)) !important;
+    }
 
     .ml-fader {
       position: absolute;
@@ -256,11 +268,40 @@
     ctx.drawImage(img, -6, -6, 60, 60);
   }
 
+  // Lo que la persona tiene configurado en Spicy Lyrics se lee de su propia letra: tamaño, espacio
+  // entre líneas y clases como la que quita el desenfoque
+  let spicyLook = null;
+
+  function readLook(page) {
+    const lyrics = page.querySelector(".ContentBox > .LyricsContainer:not(.ml-outgoing)");
+    const line = lyrics?.querySelector(".line:not(.musical-line):not(.bg-line)");
+    const word = line?.querySelector(".word");
+    if (!word) return null;
+    const background = lyrics.querySelector(".line.bg-line .word");
+    const extras = [...lyrics.querySelector(".LyricsContent").classList].filter((name) => !/^(LyricsContent|Scrollbar|simplebar|hide-scrollbar|LinesAllSung)/.test(name));
+    return {
+      width: page.clientWidth,
+      font: getComputedStyle(word).fontSize,
+      fontBackground: background ? getComputedStyle(background).fontSize : null,
+      gap: getComputedStyle(line).marginTop,
+      classes: ["LyricsContent", ...extras].join(" "),
+    };
+  }
+
+  function applyLook(box, content, look) {
+    box.style.setProperty("--ml-font", look.font);
+    box.style.setProperty("--ml-gap", look.gap);
+    if (look.fontBackground) box.style.setProperty("--ml-font-bg", look.fontBackground);
+    if (content.className !== look.classes) content.className = look.classes;
+  }
+
   // Copia cada segundo el fondo que Spicy Lyrics saca del video, para conservar el de la canción que sale
   let ambientShot = null;
 
   function snapshotAmbient() {
     if (document.hidden || active) return;
+    const spicyPage = document.querySelector("#SpicyLyricsPage");
+    if (spicyPage) spicyLook = readLook(spicyPage) ?? spicyLook;
     const ambient = document.querySelector("#SpicyLyricsPage .CanvasAmbient");
     const coverBackground = document.querySelector("#SpicyLyricsPage .spicy-dynamic-bg");
     if (!ambient?.width || (coverBackground && +getComputedStyle(coverBackground).opacity > 0.5)) {
@@ -463,6 +504,7 @@
     rows.forEach((row) => scroller.append(row.el));
     content.append(scroller);
     box.append(content);
+    if (spicyLook?.width === page.clientWidth) applyLook(box, content, spicyLook);
     // Después de la original: así Spicy Lyrics sigue encontrando su propio contenedor primero
     contentBox.append(box);
 
@@ -479,14 +521,20 @@
     fader.append(leftName, rail, rightName);
     contentBox.append(fader);
 
-    view = { page, box, scroller, rows, fader, knob, rail, original, backdrop, backOut, gutter, focused: -1, aimY: null, alignedAt: 0 };
+    view = { page, box, content, scroller, rows, fader, knob, rail, original, backdrop, backOut, gutter, focused: -1, aimY: null, alignedAt: 0 };
   }
 
   // Las dos columnas quedan a la misma distancia de su borde: la que usa la letra de Spicy Lyrics.
   // Spicy Lyrics cambia el tamaño de su letra al entrar la canción y al cambiar de vista, así que se repite.
   // Se mide en una línea cantada: las de solo música no llevan el relleno derecho de las demás
   function alignEdges() {
-    const { page, original, rows, scroller } = view;
+    const { page, original, rows, scroller, box, content } = view;
+    const look = readLook(page);
+    if (look && JSON.stringify(look) !== JSON.stringify(view.look)) {
+      view.look = look;
+      spicyLook = look;
+      applyLook(box, content, look);
+    }
     const typical = original?.querySelector(".line:not(.musical-line):not(.bg-line):not(.OppositeAligned)");
     const pageWidth = page.clientWidth;
     const pageLeft = page.getBoundingClientRect().left;
