@@ -21,6 +21,8 @@ This is for playlists mixed in Spotify's transition editor, not for crossfade.
 - [Spicy Lyrics](https://github.com/Spikerko/spicy-lyrics), installed separately
 - A playlist with transitions made in Spotify's mix editor
 
+Mix Lyrics doesn't need any particular theme. With [Vitral](https://github.com/SrPictus/vitral), both songs take its font, background and blue karaoke glow.
+
 ## Install
 
 From the Spicetify Marketplace: search for **Mix Lyrics** in the Extensions tab and install it.
