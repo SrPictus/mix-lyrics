@@ -122,7 +122,15 @@
     /* El tamaño de Spicy Lyrics depende de su contenedor, que aquí es otro: se copia lo que tiene la letra nueva */
     #SpicyLyricsPage .LyricsContainer.ml-outgoing .line {
       --DefaultLyricsSize: var(--ml-font, 3rem) !important;
-      margin-block: var(--ml-gap, 0.45em) !important;
+      margin: var(--ml-gap, 0.35em) 0 0 !important;
+      column-gap: 0.32ch;
+    }
+    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line.bg-line {
+      margin-top: var(--ml-gap-bg, 0px) !important;
+    }
+    /* El mismo hueco entre palabras que la columna derecha */
+    #SpicyLyricsPage .LyricsContainer.ml-outgoing .line .word::after {
+      margin-right: 0 !important;
     }
     #SpicyLyricsPage .LyricsContainer.ml-outgoing .line:not(.bg-line) {
       font-size: var(--ml-font, 3rem) !important;
@@ -271,6 +279,28 @@
   // Lo que la persona tiene configurado en Spicy Lyrics se lee de su propia letra: tamaño, espacio
   // entre líneas y clases como la que quita el desenfoque
   let spicyLook = null;
+  let gapCache = null;
+
+  // Spicy Lyrics separa sus líneas sin usar margen, así que se mide la distancia real entre ellas.
+  // Basta una vez por tamaño de letra: mientras la letra se desplaza la distancia varía un momento
+  function readGaps(lyrics, key) {
+    if (gapCache?.key === key) return gapCache;
+    const between = (selector) => {
+      const gaps = [];
+      for (const line of lyrics.querySelectorAll(selector)) {
+        const previous = line.previousElementSibling;
+        if (!previous?.classList.contains("line") || previous.classList.contains("bg-line") || previous.classList.contains("musical-line")) continue;
+        const gap = line.getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+        if (gap >= 0 && gap < 200) gaps.push(gap);
+        if (gaps.length >= 9) break;
+      }
+      return gaps.length ? `${gaps.sort((a, b) => a - b)[gaps.length >> 1].toFixed(1)}px` : null;
+    };
+    const gap = between(".line:not(.bg-line):not(.musical-line)");
+    if (!gap) return { gap: null, gapBackground: null };
+    gapCache = { key, gap, gapBackground: between(".line.bg-line") };
+    return gapCache;
+  }
 
   function readLook(page) {
     const lyrics = page.querySelector(".ContentBox > .LyricsContainer:not(.ml-outgoing)");
@@ -280,18 +310,22 @@
     const background = lyrics.querySelector(".line.bg-line .word");
     // Solo las clases de ajustes: las demás son estados pasajeros, como la que oculta la letra mientras carga
     const extras = [...lyrics.querySelector(".LyricsContent").classList].filter((name) => /^(HideLineBlur|Compactify)/.test(name));
+    const font = getComputedStyle(word).fontSize;
+    const { gap, gapBackground } = readGaps(lyrics, `${page.clientWidth}|${font}`);
     return {
       width: page.clientWidth,
-      font: getComputedStyle(word).fontSize,
+      font,
       fontBackground: background ? getComputedStyle(background).fontSize : null,
-      gap: getComputedStyle(line).marginTop,
+      gap,
+      gapBackground,
       classes: ["LyricsContent", ...extras].join(" "),
     };
   }
 
   function applyLook(box, content, look) {
     box.style.setProperty("--ml-font", look.font);
-    box.style.setProperty("--ml-gap", look.gap);
+    if (look.gap) box.style.setProperty("--ml-gap", look.gap);
+    if (look.gapBackground) box.style.setProperty("--ml-gap-bg", look.gapBackground);
     if (look.fontBackground) box.style.setProperty("--ml-font-bg", look.fontBackground);
     if (content.className !== look.classes) content.className = look.classes;
   }
@@ -579,8 +613,13 @@
         row.el.classList.replace(row.state, state);
         row.state = state;
       }
-      if (state === "Active" || row.spans[0].progress < 0 || (state === "Sung" && row.spans[row.spans.length - 1].progress < 1)) {
+      if (state === "Active") {
         row.spans.forEach((entry) => paintWord(entry, position));
+        row.resting = false;
+      } else if (!row.resting) {
+        // Como en Spicy Lyrics, las líneas cantadas vuelven al estado apagado de las que faltan
+        row.spans.forEach((entry) => paintWord(entry, -Infinity));
+        row.resting = true;
       }
     });
 
