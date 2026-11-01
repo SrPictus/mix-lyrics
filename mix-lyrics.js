@@ -278,7 +278,8 @@
     const word = line?.querySelector(".word");
     if (!word) return null;
     const background = lyrics.querySelector(".line.bg-line .word");
-    const extras = [...lyrics.querySelector(".LyricsContent").classList].filter((name) => !/^(LyricsContent|Scrollbar|simplebar|hide-scrollbar|LinesAllSung)/.test(name));
+    // Solo las clases de ajustes: las demás son estados pasajeros, como la que oculta la letra mientras carga
+    const extras = [...lyrics.querySelector(".LyricsContent").classList].filter((name) => /^(HideLineBlur|Compactify)/.test(name));
     return {
       width: page.clientWidth,
       font: getComputedStyle(word).fontSize,
@@ -528,7 +529,7 @@
   // Spicy Lyrics cambia el tamaño de su letra al entrar la canción y al cambiar de vista, así que se repite.
   // Se mide en una línea cantada: las de solo música no llevan el relleno derecho de las demás
   function alignEdges() {
-    const { page, original, rows, scroller, box, content } = view;
+    const { page, original, scroller, box, content } = view;
     const look = readLook(page);
     if (look && JSON.stringify(look) !== JSON.stringify(view.look)) {
       view.look = look;
@@ -543,8 +544,7 @@
     // En las vistas medianas Spicy Lyrics centra la letra con mucho margen: ahí se reduce para que quepan dos columnas.
     // La letra nueva puede tardar en montarse, pero la columna izquierda se coloca desde el primer momento
     const margin = Math.min(base, pageWidth * COLUMN_MARGIN);
-    const off = margin - (rows[0].el.getBoundingClientRect().left - pageLeft);
-    if (Math.abs(off) > 1) view.gutter = Math.max(0, view.gutter + off);
+    view.gutter = Math.max(0, margin - (scroller.getBoundingClientRect().left - pageLeft));
     scroller.style.paddingLeft = `${Math.round(view.gutter)}px`;
     scroller.style.paddingRight = `${COLUMN_GAP}px`;
     if (!typical) return;
