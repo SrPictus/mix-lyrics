@@ -27,12 +27,11 @@
     #SpicyLyricsPage.ml-mixing ${NEW_LYRICS} {
       position: relative;
       z-index: 2;
-      opacity: var(--ml-in, 1);
       transition: none;
     }
     /* Hasta saber dónde va, la letra nueva no se enseña: así nunca aparece fuera de su sitio */
     #SpicyLyricsPage.ml-columns:not(.ml-aligned) ${NEW_LYRICS} {
-      opacity: 0;
+      opacity: 0 !important;
     }
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} {
       transform: translateX(var(--ml-shift, 50%));
@@ -59,14 +58,13 @@
     #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line.OppositeAligned .word-group {
       justify-content: flex-start !important;
     }
-    /* Cada palabra trae su espacio detrás: se deja colgando para que las filas partidas también acaben rectas */
-    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) > .word,
-    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) > .word-group {
-      margin-left: 0.2em;
+    /* Como hace Spicy Lyrics con sus líneas a la derecha: un hueco entre palabras en vez de un espacio
+       pegado a cada una, para que las filas partidas también acaben rectas */
+    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) {
+      column-gap: 0.32ch;
     }
-    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) > .word:not(.LastWordInLine),
-    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) > .word-group:not(:last-child) {
-      margin-right: -0.2em;
+    #SpicyLyricsPage.ml-columns ${NEW_LYRICS} .line:not(.OppositeAligned) .word::after {
+      margin-right: 0 !important;
     }
     /* La letra se desvanece antes de llegar a la píldora */
     #SpicyLyricsPage.ml-columns .LyricsContainer .LyricsContent {
@@ -106,7 +104,6 @@
       overflow: hidden;
       pointer-events: none;
       transform: none;
-      opacity: var(--ml-out, 1);
     }
     #SpicyLyricsPage.ml-columns .LyricsContainer.ml-outgoing { width: 50%; height: 100%; }
     #SpicyLyricsPage.ml-stacked .LyricsContainer.ml-outgoing { width: 100%; height: 44%; }
@@ -263,7 +260,7 @@
   let ambientShot = null;
 
   function snapshotAmbient() {
-    if (document.hidden) return;
+    if (document.hidden || active) return;
     const ambient = document.querySelector("#SpicyLyricsPage .CanvasAmbient");
     const coverBackground = document.querySelector("#SpicyLyricsPage .spicy-dynamic-bg");
     if (!ambient?.width || (coverBackground && +getComputedStyle(coverBackground).opacity > 0.5)) {
@@ -322,19 +319,36 @@
     s.transform = `translateY(calc(var(--DefaultLyricsSize) * ${(0.01 - 0.03 * progress).toFixed(3)}))`;
   }
 
+  const setOpacity = (el, value) => {
+    const rounded = Math.round(value * 100) / 100;
+    if (el && parseFloat(el.style.opacity) !== rounded) el.style.opacity = rounded;
+  };
+
   const smooth = (t) => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
   // Durante la mezcla Spotify informa la posición de la canción nueva a velocidad normal aunque
-  // el audio vaya acelerado, y al terminar la corrige de golpe, así que Spicy Lyrics se atrasa y
-  // luego salta. Mientras dura la mezcla, quien lea el estado recibe la posición real del audio
+  // el audio vaya acelerado o frenado, y al terminar la corrige de golpe, así que Spicy Lyrics se
+  // desfasa y luego salta. Mientras dura la mezcla, quien lea el estado recibe la posición real del audio
   const playerAPI = P.PlayerAPI;
   let rawState = null;
   let clockPatched = false;
+  // Cuando Spotify ya publicó la posición real, su reloj vale tal cual. El desfase mantiene seguido
+  // el tiempo de la mezcla a pesar de ese salto
+  let clockPublished = false;
+  let clockSeeked = false;
+  let clockSkew = 0;
+
+  const positionOf = (state) => (state.isPaused ? state.positionAsOfTimestamp : state.positionAsOfTimestamp + (Date.now() - state.timestamp));
 
   const rawPosition = () => {
     const state = clockPatched ? rawState : playerAPI._state;
     if (!state) return Spicetify.Player.getProgress();
-    return state.isPaused ? state.positionAsOfTimestamp : state.positionAsOfTimestamp + (Date.now() - state.timestamp);
+    return positionOf(state) + clockSkew;
+  };
+
+  const realPosition = (overlap, elapsed) => {
+    const inside = Math.min(elapsed, overlap.durationMs);
+    return overlap.startBMs + inside * overlap.speedB + (elapsed - inside);
   };
 
   function patchClock(overlap, nextUri) {
@@ -343,24 +357,39 @@
     if (Math.abs(overlap.speedB - 1) < 0.001) return;
     rawState = descriptor.value;
     clockPatched = true;
+    clockPublished = false;
+    clockSeeked = false;
+    clockSkew = 0;
     Object.defineProperty(playerAPI, "_state", {
       configurable: true,
       enumerable: descriptor.enumerable,
-      set(value) { rawState = value; },
+      set(value) {
+        if (!clockPublished && rawState?.item?.uri === nextUri && value?.item?.uri === nextUri) {
+          const before = positionOf(rawState);
+          const after = positionOf(value);
+          const jump = Math.abs(after - before);
+          const elapsed = before - overlap.startBMs;
+          // Un salto grande o cerca del final: o Spotify publica la posición real, o el usuario movió la barra
+          if (jump > 1500 || (jump > 250 && elapsed > overlap.durationMs * 0.5)) {
+            clockPublished = true;
+            clockSkew = before - after;
+            clockSeeked = Math.abs(after - realPosition(overlap, elapsed)) > 1500;
+          }
+        }
+        rawState = value;
+      },
       get() {
-        if (!rawState || rawState.item?.uri !== nextUri) return rawState;
-        const elapsed = rawPosition() - overlap.startBMs;
+        if (clockPublished || !rawState || rawState.item?.uri !== nextUri) return rawState;
+        const elapsed = positionOf(rawState) - overlap.startBMs;
         if (elapsed < 0) return rawState;
-        // Al acabar, Spotify tarda un momento en publicar la posición real: se sigue a velocidad normal hasta entonces
-        const inside = Math.min(elapsed, overlap.durationMs);
-        const corrected = overlap.startBMs + inside * overlap.speedB + (elapsed - inside);
-        if (rawPosition() >= corrected) return rawState;
-        return { ...rawState, positionAsOfTimestamp: corrected, timestamp: Date.now() };
+        return { ...rawState, positionAsOfTimestamp: realPosition(overlap, elapsed), timestamp: Date.now() };
       },
     });
   }
 
   function restoreClock() {
+    clockSkew = 0;
+    clockSeeked = false;
     if (!clockPatched) return;
     clockPatched = false;
     Object.defineProperty(playerAPI, "_state", { configurable: true, enumerable: true, writable: true, value: rawState });
@@ -375,9 +404,10 @@
 
   function unmount() {
     if (!view) return;
-    const { page, box, fader, backdrop } = view;
+    const { page, box, fader, backdrop, original } = view;
     page.classList.remove("ml-mixing", "ml-columns", "ml-stacked", "ml-aligned");
-    ["--ml-in", "--ml-out", "--ml-shift", "--ml-pad", "--ml-pad-left"].forEach((name) => page.style.removeProperty(name));
+    original?.style.removeProperty("opacity");
+    ["--ml-shift", "--ml-pad", "--ml-pad-left"].forEach((name) => page.style.removeProperty(name));
     box.remove();
     fader.remove();
     backdrop.remove();
@@ -478,8 +508,14 @@
       view.shift = shift;
       page.style.setProperty("--ml-shift", `${shift}px`);
     }
-    page.style.setProperty("--ml-pad", `${padding}px`);
-    page.style.setProperty("--ml-pad-left", `${Math.round(Math.max(0, textWidth - columnWidth))}px`);
+    // Una variable en la página recalcula los estilos de toda la letra: solo se toca si cambia
+    const padLeft = Math.round(Math.max(0, textWidth - columnWidth));
+    if (padding !== view.padding || padLeft !== view.padLeft) {
+      view.padding = padding;
+      view.padLeft = padLeft;
+      page.style.setProperty("--ml-pad", `${padding}px`);
+      page.style.setProperty("--ml-pad-left", `${padLeft}px`);
+    }
     page.classList.add("ml-aligned");
   }
 
@@ -511,6 +547,7 @@
         return;
       }
       view.alignedAt = now;
+      view.railWidth = rail.clientWidth;
       let aim = box.clientHeight * 0.34;
       if (isColumns) {
         alignEdges();
@@ -546,14 +583,10 @@
     const lastFade = Math.min(1, (active.releaseAt - elapsed) / FADE_MS);
     const leaving = smooth((mix - 0.45) / 0.55);
     const entering = smooth(mix / 0.55);
-    page.style.setProperty("--ml-in", (0.4 + 0.6 * entering).toFixed(3));
-    page.style.setProperty("--ml-out", ((1 - 0.55 * leaving) * lastFade).toFixed(3));
-    backOut.style.opacity = (1 - smooth(mix)).toFixed(3);
-    knob.style.transform = `translateX(${(Math.min(1, mix) * rail.clientWidth).toFixed(1)}px)`;
-
-    box.dataset.position = String(Math.round(position));
-    box.dataset.elapsed = String(Math.round(elapsed));
-    box.dataset.line = String(target);
+    setOpacity(original, 0.4 + 0.6 * entering);
+    setOpacity(box, (1 - 0.55 * leaving) * lastFade);
+    setOpacity(backOut, 1 - smooth(mix));
+    knob.style.transform = `translateX(${(Math.min(1, mix) * view.railWidth).toFixed(1)}px)`;
   }
 
   function startSplit(lines, overlap, nextUri, from, to) {
@@ -572,9 +605,9 @@
       last = now;
       // El reloj sin corregir avanza a velocidad normal, igual que la mezcla
       const elapsed = rawPosition() - overlap.startBMs;
-      // Se mantiene hasta que el reloj real alcanza el final de la mezcla, con un límite por si nunca salta
-      const endAt = overlap.durationMs * Math.max(1, overlap.speedB);
-      if (Spicetify.Player.data?.item?.uri !== nextUri || elapsed < -1500 || elapsed >= endAt) {
+      // Se mantiene hasta que Spotify publica la posición real, con un límite por si nunca salta
+      const endAt = overlap.durationMs + (clockPatched && !clockPublished ? 3000 : 0);
+      if (Spicetify.Player.data?.item?.uri !== nextUri || clockSeeked || elapsed < -1500 || elapsed >= endAt) {
         closeSplit();
         return;
       }
