@@ -683,12 +683,67 @@
     knob.style.transform = `translateX(${(Math.min(1, mix) * view.railWidth).toFixed(1)}px)`;
   }
 
-  function startSplit(lines, overlap, nextUri, from, to) {
+  // Los loops de la transición: cada bloque repite unos beats de la canción que sale durante
+  // una parte de la mezcla (start/end son fracciones de la mezcla)
+  async function loopBlocksOf(preset) {
+    const custom = preset?.loopingOutBlocksOverride?.blocks;
+    if (Array.isArray(custom) && custom.length) return custom;
+    const id = preset?.loopingStyleOverride?.id;
+    if (!id) return [];
+    try {
+      const found = await P.PlaylistMixingAPI.getLoopingBlocksForLoopingStyleIds([id]);
+      return found?.loopingStyleBlocks?.find((entry) => entry.style?.id === id)?.out?.blocks ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Dónde va la canción que sale tras `elapsed` ms de mezcla. Dentro de un loop la posición vuelve
+  // atrás cada N beats; al salir del loop sigue desde donde quedó
+  // Si el loop solo roza el comienzo de una línea al final de cada vuelta, la letra se queda antes
+  // (en el ritmo, con las bolitas) en lugar de asomar esa línea y volver atrás cada vez
+  const LOOP_LINE_MIN_MS = 900;
+  const holdInLoop = (starts, anchor, length, pos) => {
+    const edge = starts.find((start) => start > anchor && start <= anchor + length);
+    if (edge === undefined || anchor + length - edge >= Math.min(LOOP_LINE_MIN_MS, length * 0.5)) return pos;
+    return Math.min(pos, edge - AUDIO_LEAD_MS - 1);
+  };
+
+  function outgoingPosition(overlap, blocks, elapsed, starts = []) {
+    const speed = overlap.speedA || 1;
+    const beatMs = 60000 / (overlap.bpmA || 120);
+    let pos = overlap.startAMs;
+    let at = 0;
+    for (const block of blocks) {
+      const from = block.start * overlap.durationMs;
+      const to = block.end * overlap.durationMs;
+      const length = block.beats * beatMs;
+      if (!(length > 0) || to <= from) continue;
+      pos += (Math.min(elapsed, from) - at) * speed;
+      at = Math.min(elapsed, from);
+      if (elapsed <= from) return pos;
+      const inside = (Math.min(elapsed, to) - from) * speed;
+      const anchor = pos;
+      pos += inside % length;
+      at = Math.min(elapsed, to);
+      if (elapsed <= to) return holdInLoop(starts, anchor + AUDIO_LEAD_MS, length, pos);
+    }
+    return pos + (elapsed - at) * speed;
+  }
+
+  function startSplit(lines, overlap, blocks, nextUri, from, to) {
     closeSplit();
     // Si a la canción que sale se le acaba la letra antes que la mezcla, la vista se suelta
     // ahí. El reloj corregido sigue hasta el final real: el audio continúa mezclándose
     const lastLineEnd = Math.max(...lines.map((line) => line.end));
-    const releaseAt = Math.min(overlap.durationMs, (lastLineEnd - overlap.startAMs - AUDIO_LEAD_MS) / overlap.speedA + RELEASE_AFTER_LAST_LINE_MS);
+    const starts = lines.filter((line) => !line.background).map((line) => line.start).sort((a, b) => a - b);
+    let releaseAt = overlap.durationMs;
+    for (let t = 0; t < overlap.durationMs; t += 50) {
+      if (outgoingPosition(overlap, blocks, t) + AUDIO_LEAD_MS >= lastLineEnd) {
+        releaseAt = Math.min(overlap.durationMs, t + RELEASE_AFTER_LAST_LINE_MS);
+        break;
+      }
+    }
     active = { lines, overlap, nextUri, releaseAt, fromName: from.name, toName: to.name, fromCover: from.cover, fromAmbient: from.ambient };
     patchClock(overlap, nextUri);
     let last = 0;
@@ -711,7 +766,7 @@
         return;
       }
       if (!view || view.page !== page || !view.box.isConnected) mount(page);
-      if (view) paint(overlap.startAMs + Math.max(0, elapsed) * overlap.speedA + AUDIO_LEAD_MS, Math.max(0, elapsed), now);
+      if (view) paint(outgoingPosition(overlap, blocks, Math.max(0, elapsed), starts) + AUDIO_LEAD_MS, Math.max(0, elapsed), now);
     };
     loop = requestAnimationFrame(frame);
   }
@@ -753,12 +808,13 @@
         loadLyrics(previous.uri),
       ]);
       const overlap = transition?.overlap;
+      const blocks = await loopBlocksOf(transition?.preset);
       if (token !== session || !overlap?.durationMs || !lines.length) return;
       if (overlap.trackAUri !== previous.uri || overlap.trackBUri !== current.uri) return;
       if (Math.abs(leftAt - overlap.startAMs) > MIX_START_TOLERANCE_MS) return;
       const elapsed = rawPosition() - overlap.startBMs;
       if (elapsed < -1500 || elapsed >= overlap.durationMs) return;
-      startSplit(lines, overlap, current.uri, previous, current);
+      startSplit(lines, overlap, blocks, current.uri, previous, current);
     } catch {
       // Sin datos de transición: se queda solo la letra normal
     }
