@@ -333,10 +333,17 @@
   // Copia cada segundo el fondo que Spicy Lyrics saca del video, para conservar el de la canción que sale
   let ambientShot = null;
 
+  // Las mezclas empiezan cerca del final de la canción: antes de eso no hace falta copiar nada
+  const SNAPSHOT_BEFORE_END_MS = 120000;
+
   function snapshotAmbient() {
     if (document.hidden || active) return;
+    const data = Spicetify.Player.data;
+    if (!data?.context?.uri?.startsWith("spotify:playlist:")) return;
+    if (Spicetify.Player.getDuration() - Spicetify.Player.getProgress() > SNAPSHOT_BEFORE_END_MS) return;
     const spicyPage = document.querySelector("#SpicyLyricsPage");
-    if (spicyPage) spicyLook = readLook(spicyPage) ?? spicyLook;
+    if (!spicyPage) return;
+    spicyLook = readLook(spicyPage) ?? spicyLook;
     const ambient = document.querySelector("#SpicyLyricsPage .CanvasAmbient");
     const coverBackground = document.querySelector("#SpicyLyricsPage .spicy-dynamic-bg");
     if (!ambient?.width || (coverBackground && +getComputedStyle(coverBackground).opacity > 0.5)) {
@@ -711,11 +718,24 @@
 
   const describe = (item) => (item?.uri ? { uri: item.uri, name: item.name, cover: coverUrl(item) } : null);
 
+  // Dónde iba la canción justo antes de cambiar: en una mezcla, el cambio llega al empezar la
+  // transición; si la canción terminó entera o se saltó a mano, no hubo mezcla aunque Spotify tenga una guardada
+  const MIX_START_TOLERANCE_MS = 4000;
+  // Se guarda por canción: el aviso de progreso de la nueva puede llegar antes que el del cambio
+  const progressOf = new Map();
+  Spicetify.Player.addEventListener("onprogress", (event) => {
+    const uri = Spicetify.Player.data?.item?.uri;
+    if (!uri || typeof event?.data !== "number") return;
+    progressOf.set(uri, event.data);
+    if (progressOf.size > 4) progressOf.delete(progressOf.keys().next().value);
+  });
+
   async function onSongChange() {
     const token = ++session;
     closeSplit();
     const data = Spicetify.Player.data;
     const previous = current && { ...current, ambient: ambientShot };
+    const leftAt = previous ? progressOf.get(previous.uri) ?? -Infinity : -Infinity;
     // La copia queda congelada con la canción que sale; la siguiente empieza en otro lienzo
     ambientShot = null;
     current = describe(data?.item);
@@ -729,6 +749,7 @@
       const overlap = transition?.overlap;
       if (token !== session || !overlap?.durationMs || !lines.length) return;
       if (overlap.trackAUri !== previous.uri || overlap.trackBUri !== current.uri) return;
+      if (Math.abs(leftAt - overlap.startAMs) > MIX_START_TOLERANCE_MS) return;
       const elapsed = rawPosition() - overlap.startBMs;
       if (elapsed < -1500 || elapsed >= overlap.durationMs) return;
       startSplit(lines, overlap, current.uri, previous, current);
