@@ -721,12 +721,15 @@
   // Dónde iba la canción justo antes de cambiar: en una mezcla, el cambio llega al empezar la
   // transición; si la canción terminó entera o se saltó a mano, no hubo mezcla aunque Spotify tenga una guardada
   const MIX_START_TOLERANCE_MS = 4000;
+  const NATURAL_END_MS = 3000;
   // Se guarda por canción: el aviso de progreso de la nueva puede llegar antes que el del cambio
   const progressOf = new Map();
   Spicetify.Player.addEventListener("onprogress", (event) => {
     const uri = Spicetify.Player.data?.item?.uri;
     if (!uri || typeof event?.data !== "number") return;
-    progressOf.set(uri, event.data);
+    // La duración real de la canción: en las listas mezcladas, getDuration da el punto donde empieza la mezcla
+    const length = Spicetify.Player.data?.item?.duration?.milliseconds ?? Number(Spicetify.Player.data?.item?.metadata?.duration);
+    progressOf.set(uri, { at: event.data, length: length || Infinity });
     if (progressOf.size > 4) progressOf.delete(progressOf.keys().next().value);
   });
 
@@ -735,10 +738,13 @@
     closeSplit();
     const data = Spicetify.Player.data;
     const previous = current && { ...current, ambient: ambientShot };
-    const leftAt = previous ? progressOf.get(previous.uri) ?? -Infinity : -Infinity;
+    const left = previous ? progressOf.get(previous.uri) : null;
     // La copia queda congelada con la canción que sale; la siguiente empieza en otro lienzo
     ambientShot = null;
     current = describe(data?.item);
+    // Si la canción que sale llegó a su final, terminó sola: ninguna mezcla empieza en los últimos segundos
+    if (!left || left.at >= left.length - NATURAL_END_MS) return;
+    const leftAt = left.at;
     const contextUri = data?.context?.uri ?? "";
     if (!current || !previous || previous.uri === current.uri || !contextUri.startsWith("spotify:playlist:")) return;
     try {
