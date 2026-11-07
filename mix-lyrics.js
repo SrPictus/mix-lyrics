@@ -8,6 +8,7 @@
   }
 
   const SPICY_CACHE = "SpicyLyrics_LyricsStore_g1";
+  const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const FADE_MS = 1500;
   const FRAME_MS = 33;
   const COLUMNS_MIN_WIDTH = 800;
@@ -195,10 +196,78 @@
     @keyframes ml-fade-in {
       from { opacity: 0; }
     }
+
+    /* Antes de la mezcla, la primera línea que se oirá de la canción que entra asoma desde abajo */
+    .ml-teaser {
+      position: absolute;
+      left: 50%;
+      bottom: 28px;
+      /* Por encima de las líneas de Spicy Lyrics, que tienen su propia capa */
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      max-width: min(760px, 86%);
+      padding: 12px 26px 14px;
+      border-radius: 22px;
+      background: rgba(6, 8, 16, 0.82);
+      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+      color: #fff;
+      text-align: center;
+      pointer-events: none;
+      transform: translate(-50%, 24px);
+      opacity: 0;
+      filter: blur(8px);
+      transition: transform 0.9s cubic-bezier(.22,1,.36,1), opacity 0.9s ease, filter 0.9s ease;
+    }
+    .ml-teaser.is-on {
+      transform: translate(-50%, 0);
+      opacity: 1;
+      filter: none;
+    }
+    .ml-teaser small {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      opacity: 0.7;
+    }
+    .ml-teaser small img {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+    }
+    .ml-teaser p {
+      margin: 0;
+      font-size: clamp(18px, 2.3vw, 30px);
+      font-weight: 700;
+      line-height: 1.2;
+      text-shadow: 0 2px 18px rgba(0, 0, 0, 0.5);
+    }
+    .ml-teaser p span {
+      display: inline-block;
+      margin-right: 0.28ch;
+      opacity: 0;
+      transform: translateY(0.5em);
+      transition: opacity 0.6s ease, transform 0.6s cubic-bezier(.22,1,.36,1);
+      transition-delay: calc(var(--i) * 70ms + 250ms);
+    }
+    .ml-teaser.is-on p span {
+      opacity: 0.85;
+      transform: none;
+    }
     @media (prefers-reduced-motion: reduce) {
       #SpicyLyricsPage ${NEW_LYRICS},
       #SpicyLyricsPage .LyricsContainer.ml-outgoing .SpicyLyricsScrollContainer { transition: none; }
       .ml-fader { animation: none; }
+      .ml-teaser, .ml-teaser p span { transition: opacity 0.3s ease; transform: translate(-50%, 0); filter: none; }
+      .ml-teaser p span { transform: none; }
     }
   `;
   document.head.append(style);
@@ -490,6 +559,8 @@
     const { page, box, fader, backdrop, original } = view;
     page.classList.remove("ml-mixing", "ml-columns", "ml-stacked", "ml-aligned");
     original?.style.removeProperty("opacity");
+    original?.style.removeProperty("filter");
+    original?.style.removeProperty("scale");
     ["--ml-shift", "--ml-pad", "--ml-pad-left"].forEach((name) => page.style.removeProperty(name));
     box.remove();
     fader.remove();
@@ -677,11 +748,103 @@
     const lastFade = Math.min(1, (active.releaseAt - elapsed) / FADE_MS);
     const leaving = smooth((mix - 0.45) / 0.55);
     const entering = smooth(mix / 0.55);
-    setOpacity(original, 0.4 + 0.6 * entering);
-    setOpacity(box, (1 - 0.55 * leaving) * lastFade);
+    const { overlap, effects, blocks } = active;
+    const t = Math.min(1, elapsed / overlap.durationMs);
+    const lookOut = lookOf(effects?.out, t, -1);
+    const lookIn = lookOf(effects?.in, t, isColumns ? 1 : -1);
+    // Si la mezcla trae su curva de volumen, cada columna brilla según suena de verdad su canción
+    setOpacity(original, lookIn.volume === null ? 0.4 + 0.6 * entering : 0.4 + 0.6 * lookIn.volume);
+    setOpacity(box, (lookOut.volume === null ? 1 - 0.55 * leaving : 0.3 + 0.7 * lookOut.volume) * lastFade);
+    setStyle(view.content, "filter", lookOut.filter);
+    setStyle(original, "filter", lookIn.filter);
+    if (!REDUCED_MOTION) {
+      const inLoop = blocks.some((block) => t >= block.start && t < block.end);
+      const pulseOut = beatPulse(position, overlap.startAMs, overlap.bpmA) * lookOut.bass * (inLoop ? 0.03 : 0.012);
+      const incoming = overlap.startBMs + elapsed * (overlap.speedB || 1);
+      const pulseIn = beatPulse(incoming, overlap.startBMs, overlap.bpmB) * lookIn.bass * 0.012;
+      setStyle(view.content, "scale", (1 + pulseOut).toFixed(3));
+      setStyle(original, "scale", (1 + pulseIn).toFixed(3));
+    }
     setOpacity(backOut, 1 - smooth(mix));
     knob.style.transform = `translateX(${(Math.min(1, mix) * view.railWidth).toFixed(1)}px)`;
   }
+
+  // Efectos de la mezcla. Spotify los guarda como curvas: tramos con su inicio y final en fracción de la
+  // mezcla y puntos {x, y} dentro de cada tramo. Una transición puede traer sus propias curvas o usar las de un estilo
+  function curveAt(curve, t) {
+    const parts = curve?.curves;
+    if (!parts?.length) return null;
+    const part = parts.find((p) => t >= p.start && t < p.end) ?? (t < parts[0].start ? parts[0] : parts[parts.length - 1]);
+    const points = part.points ?? [];
+    if (!points.length) return null;
+    const x = part.end > part.start ? Math.min(1, Math.max(0, (t - part.start) / (part.end - part.start))) : 1;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      if (x <= b.x) return b.x > a.x ? a.y + ((b.y - a.y) * (x - a.x)) / (b.x - a.x) : b.y;
+    }
+    return points[points.length - 1].y;
+  }
+
+  async function effectsOf(preset) {
+    if (!preset) return null;
+    const api = P.PlaylistMixingAPI;
+    const style = async (method, id, list) => {
+      if (!id || typeof api[method] !== "function") return null;
+      try {
+        return (await api[method]([id]))?.[list]?.find((entry) => entry.style?.id === id) ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const [volume, eq, filter, fx] = await Promise.all([
+      style("getVolumeStylesForVolumeStyleIds", preset.volumeStyleOverride?.id, "volumeStyles"),
+      style("getEqStylesForEqStyleIds", preset.eqStyleOverride?.id, "eqStyles"),
+      style("getFilterFxStylesForFilterFxStyleIds", preset.filterFxStyleOverride?.id, "filterFxStyles"),
+      style("getFxStylesForFxStyleIds", preset.fxStyleOverride?.id, "fxStyles"),
+    ]);
+    // Lo propio de la transición manda sobre el estilo
+    const pick = (own, fromStyle) => (own?.curves?.length ? own : fromStyle?.curves?.length ? fromStyle : null);
+    const side = (dir) => ({
+      volume: pick(preset[`volume${dir}CurveOverride`], volume?.[`fade${dir}Curves`]),
+      low: pick(preset[`eq${dir}CurveOverrides`]?.low, eq?.[`lowEq${dir}Curves`]),
+      cutoff: pick(preset[`filter${dir}CurveOverrides`]?.cutoff, filter?.[`filterCutoff${dir}Curves`]),
+      reverb: pick(preset[`fx${dir}CurveOverrides`]?.reverbDryWet, fx?.[`reverbDryWet${dir}Curves`]),
+      echo: pick(preset[`fx${dir}CurveOverrides`]?.echoDryWet, fx?.[`echoDryWet${dir}Curves`]),
+    });
+    return { out: side("Out"), in: side("In") };
+  }
+
+  // Cómo se ve cada efecto en la letra: el filtro que apaga el sonido la desenfoca, el que quita los graves
+  // la vuelve fina y clara, el eco deja copias detrás y la reverb un halo. Los graves marcan el latido
+  function lookOf(side, t, echoDirection) {
+    const value = (curve, neutral) => curveAt(curve, t) ?? neutral;
+    const cutoff = value(side?.cutoff, 0.5);
+    const echo = value(side?.echo, 0);
+    const reverb = value(side?.reverb, 0);
+    const parts = [];
+    if (cutoff < 0.48) parts.push(`blur(${((0.5 - cutoff) * 10).toFixed(1)}px)`);
+    if (cutoff > 0.52) {
+      const k = (cutoff - 0.5) * 2;
+      parts.push(`saturate(${(1 - 0.8 * k).toFixed(2)}) brightness(${(1 + 0.35 * k).toFixed(2)})`);
+    }
+    if (echo > 0.02) {
+      parts.push(`drop-shadow(${(echoDirection * 0.22 * echo).toFixed(3)}em 0 0 rgba(255,255,255,${(0.4 * echo).toFixed(2)}))`);
+      parts.push(`drop-shadow(${(echoDirection * 0.22 * echo).toFixed(3)}em 0 0 rgba(255,255,255,${(0.2 * echo).toFixed(2)}))`);
+    }
+    if (reverb > 0.02) parts.push(`drop-shadow(0 0 ${Math.round(26 * reverb)}px rgba(255,255,255,${(0.45 * reverb).toFixed(2)}))`);
+    return { filter: parts.join(" "), volume: curveAt(side?.volume, t), bass: value(side?.low, 0.5) * 2 };
+  }
+
+  // El latido: un golpe que decae en cada beat de su propia canción
+  function beatPulse(position, anchor, bpm) {
+    const beatMs = 60000 / (bpm || 120);
+    const phase = ((((position - anchor) % beatMs) + beatMs) % beatMs) / beatMs;
+    return Math.exp(-phase * 5);
+  }
+
+  const setStyle = (el, name, value) => {
+    if (el && el.style[name] !== value) el.style[name] = value;
+  };
 
   // Los loops de la transición: cada bloque repite unos beats de la canción que sale durante
   // una parte de la mezcla (start/end son fracciones de la mezcla)
@@ -731,8 +894,9 @@
     return pos + (elapsed - at) * speed;
   }
 
-  function startSplit(lines, overlap, blocks, nextUri, from, to) {
+  function startSplit(lines, overlap, blocks, effects, nextUri, from, to) {
     closeSplit();
+    hideTeaser();
     // Si a la canción que sale se le acaba la letra antes que la mezcla, la vista se suelta
     // ahí. El reloj corregido sigue hasta el final real: el audio continúa mezclándose
     const lastLineEnd = Math.max(...lines.map((line) => line.end));
@@ -744,7 +908,7 @@
         break;
       }
     }
-    active = { lines, overlap, nextUri, releaseAt, fromName: from.name, toName: to.name, fromCover: from.cover, fromAmbient: from.ambient };
+    active = { lines, overlap, blocks, effects, nextUri, releaseAt, fromName: from.name, toName: to.name, fromCover: from.cover, fromAmbient: from.ambient };
     patchClock(overlap, nextUri);
     let last = 0;
     const frame = (now) => {
@@ -808,18 +972,128 @@
         loadLyrics(previous.uri),
       ]);
       const overlap = transition?.overlap;
-      const blocks = await loopBlocksOf(transition?.preset);
+      const [blocks, effects] = await Promise.all([loopBlocksOf(transition?.preset), effectsOf(transition?.preset)]);
       if (token !== session || !overlap?.durationMs || !lines.length) return;
       if (overlap.trackAUri !== previous.uri || overlap.trackBUri !== current.uri) return;
       if (Math.abs(leftAt - overlap.startAMs) > MIX_START_TOLERANCE_MS) return;
       const elapsed = rawPosition() - overlap.startBMs;
       if (elapsed < -1500 || elapsed >= overlap.durationMs) return;
-      startSplit(lines, overlap, blocks, current.uri, previous, current);
+      startSplit(lines, overlap, blocks, effects, current.uri, previous, current);
     } catch {
       // Sin datos de transición: se queda solo la letra normal
     }
   }
 
+  // Vista previa: unos segundos antes de que empiece una mezcla de verdad, asoma la primera línea
+  // que se va a oír de la canción que entra (que no siempre es la primera de la canción)
+  const TEASER_BEFORE_MS = 7000;
+  const TEASER_LOOKAHEAD_MS = 60000;
+  // Una mezcla guardada que empieza en los últimos segundos es la transición por defecto, no una mezcla
+  const TEASER_MIN_MIX_LEAD_MS = 8000;
+  let teaser = null;
+  let plan = null;
+
+  function hideTeaser() {
+    if (!teaser) return;
+    const el = teaser;
+    teaser = null;
+    el.classList.remove("is-on");
+    setTimeout(() => el.remove(), 900);
+  }
+
+  function showTeaser(page, next) {
+    if (teaser?.isConnected && teaser.dataset.uri === next.uri && teaser.parentElement === page.querySelector(".ContentBox")) return;
+    hideTeaser();
+    const box = page.querySelector(".ContentBox");
+    if (!box) return;
+    const el = document.createElement("div");
+    el.className = "ml-teaser";
+    el.dataset.uri = next.uri;
+    el.setAttribute("aria-hidden", "true");
+    const label = document.createElement("small");
+    if (next.cover) {
+      const img = document.createElement("img");
+      img.src = next.cover;
+      img.alt = "";
+      label.append(img);
+    }
+    label.append(`Up next · ${next.name}`);
+    el.append(label);
+    if (next.line) {
+      const text = document.createElement("p");
+      next.line.split(/\s+/).filter(Boolean).forEach((word, i) => {
+        const span = document.createElement("span");
+        span.textContent = word;
+        span.style.setProperty("--i", i);
+        text.append(span);
+      });
+      el.append(text);
+    }
+    box.append(el);
+    teaser = el;
+    // Un cuadro después, para que la entrada se anime desde abajo
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("is-on")));
+  }
+
+  async function preparePlan(uri, nextTrack, contextUri, length) {
+    const key = `${uri}|${nextTrack.uri}`;
+    if (plan?.key === key) return plan;
+    plan = { key, ready: false };
+    const mine = plan;
+    try {
+      const [transition, lines] = await Promise.all([
+        P.PlaylistMixingAPI.getComposedTransitionForTrackPair(contextUri, uri, nextTrack.uri),
+        loadLyrics(nextTrack.uri),
+      ]);
+      const overlap = transition?.overlap;
+      if (plan !== mine) return plan;
+      const real = overlap?.durationMs > 0 && overlap.trackAUri === uri && overlap.trackBUri === nextTrack.uri && overlap.startAMs < length - TEASER_MIN_MIX_LEAD_MS;
+      const first = lines.find((line) => !line.background && line.end > overlap?.startBMs + 500);
+      const meta = nextTrack.metadata ?? {};
+      Object.assign(mine, {
+        ready: true,
+        real,
+        startAMs: overlap?.startAMs,
+        next: {
+          uri: nextTrack.uri,
+          name: meta.title ?? meta.name ?? "",
+          cover: coverUrl({ metadata: meta }),
+          line: first ? first.words.map((word, i) => word.text + (word.joined || i === first.words.length - 1 ? "" : " ")).join("").trim() : "",
+        },
+      });
+    } catch {
+      Object.assign(mine, { ready: true, real: false });
+    }
+    return mine;
+  }
+
+  function checkTeaser() {
+    const page = document.querySelector("#SpicyLyricsPage");
+    const data = Spicetify.Player.data;
+    const contextUri = data?.context?.uri ?? "";
+    const uri = data?.item?.uri;
+    const nextTrack = Spicetify.Queue?.nextTracks?.[0]?.contextTrack;
+    if (active || !page || document.hidden || data?.isPaused || !uri || !contextUri.startsWith("spotify:playlist:") || !nextTrack?.uri?.startsWith("spotify:track:")) {
+      hideTeaser();
+      return;
+    }
+    const length = data.item.duration?.milliseconds ?? Number(data.item.metadata?.duration);
+    const at = Spicetify.Player.getProgress();
+    if (!length || length - at > TEASER_LOOKAHEAD_MS + TEASER_BEFORE_MS) {
+      hideTeaser();
+      return;
+    }
+    if (plan?.key !== `${uri}|${nextTrack.uri}`) preparePlan(uri, nextTrack, contextUri, length);
+    if (!plan?.ready || !plan.real || at < plan.startAMs - TEASER_BEFORE_MS || at >= plan.startAMs) {
+      hideTeaser();
+      return;
+    }
+    showTeaser(page, plan.next);
+  }
+
+  setInterval(checkTeaser, 250);
+
   Spicetify.Player.addEventListener("songchange", onSongChange);
+  Spicetify.Player.addEventListener("songchange", hideTeaser);
   current = describe(Spicetify.Player.data?.item);
 })();

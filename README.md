@@ -13,6 +13,9 @@ This is for playlists mixed in Spotify's transition editor, not for crossfade.
 - Second voices and background vocals stay on screen and inside their column
 - Keeps Spicy Lyrics' background without the video, blending the colors of both songs
 - Corrects the incoming song's clock during the mix, so its lyrics don't lag and then jump
+- **Follows loops:** when the transition loops the outgoing song, its lyrics loop with it, and hold on the beat instead of flashing the next line
+- **Up next:** a few seconds before a mix starts, the first line you'll hear from the incoming song rises in at the bottom
+- **Reacts to the mix effects:** the lyrics blur when the filter muffles the song, wash out when the bass is cut, leave echo trails and a reverb halo, pulse with the bass on each song's own beat, and fade with each song's real volume
 - Stacks the two songs on narrow windows
 
 ## Requirements
@@ -25,15 +28,46 @@ Mix Lyrics doesn't need any particular theme. With [Vitral](https://github.com/S
 
 ## Install
 
-From the Spicetify Marketplace: search for **Mix Lyrics** in the Extensions tab and install it.
+### Marketplace (recommended)
 
-Or by hand:
+Open the **Marketplace** in Spotify, go to the **Extensions** tab, search for **Mix Lyrics** and click **Install**. It updates on its own.
 
-1. Copy `mix-lyrics.js` to the Spicetify `Extensions` folder (`%appdata%\spicetify\Extensions` on Windows, `~/.config/spicetify/Extensions` on macOS and Linux).
-2. Run:
+### Manual, on Windows
+
+In PowerShell:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/SrPictus/mix-lyrics/main/mix-lyrics.js" -OutFile "$env:APPDATA\spicetify\Extensions\mix-lyrics.js"
+```
+
+```powershell
+spicetify config extensions mix-lyrics.js
+```
+
+```powershell
+spicetify apply
+```
+
+### Manual, on macOS and Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SrPictus/mix-lyrics/main/mix-lyrics.js -o ~/.config/spicetify/Extensions/mix-lyrics.js
+```
 
 ```bash
 spicetify config extensions mix-lyrics.js
+```
+
+```bash
+spicetify apply
+```
+
+### Uninstall
+
+From the Marketplace, click **Uninstall** on Mix Lyrics. If you installed it by hand:
+
+```bash
+spicetify config extensions mix-lyrics.js-
 ```
 
 ```bash
