@@ -716,13 +716,22 @@
       let aim = box.clientHeight * 0.34;
       if (isColumns) {
         alignEdges();
+        // Spicy Lyrics anima cada línea nueva: entra más abajo y sube a su sitio. Solo se copia su altura cuando ya
+        // está quieta (dos medidas iguales seguidas); mientras se mueve, se mantiene la altura de antes. Si no, la
+        // letra que sale salta arriba y abajo persiguiendo la animación
         const live = original?.querySelector(".line.Active");
-        if (live) aim = live.getBoundingClientRect().top - box.getBoundingClientRect().top;
+        const liveTop = live ? live.getBoundingClientRect().top - box.getBoundingClientRect().top : null;
+        const still = liveTop !== null && view.liveTop !== null && view.liveTop !== undefined && Math.abs(liveTop - view.liveTop) < 2;
+        view.liveTop = liveTop;
+        if (still) aim = liveTop;
         else if (view.aimY !== null) aim = view.aimY;
+        else if (liveTop !== null) aim = liveTop;
         // Al cambiar de vista la letra nueva pasa un momento fuera de pantalla: no se la sigue hasta allí
         aim = Math.min(box.clientHeight * 0.7, Math.max(box.clientHeight * 0.1, aim));
       }
-      if (target !== view.focused || view.aimY === null || Math.abs(aim - view.aimY) > 6) {
+      // Diferencias pequeñas entre líneas (unos 30 px según su altura) no mueven la letra: solo un cambio de línea
+      // o un salto grande de verdad
+      if (target !== view.focused || view.aimY === null || Math.abs(aim - view.aimY) > 40) {
         // El mismo desenfoque por distancia que Spicy Lyrics pone a sus líneas
         rows.forEach((row, i) => {
           const blur = Math.min(Math.abs(i - target) * 1.25, 6.83);
